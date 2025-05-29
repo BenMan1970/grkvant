@@ -12,7 +12,7 @@ st.title("🔍 Scanner Confluence Forex Premium (Données Alpha Vantage)")
 st.markdown("*Utilisation de l'API Alpha Vantage pour les données de marché H1*")
 
 # Clé API Alpha Vantage (via variable d'environnement pour sécurité)
-API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "votre_clé_api_alpha_vantage")  # Remplacez par votre clé ou configurez dans les secrets
+API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "votre_clé_api_alpha_vantage")
 
 # Liste des paires forex (format Alpha Vantage)
 FOREX_PAIRS = [
@@ -103,52 +103,59 @@ def ichimoku_pine_signal(df_high, df_low, df_close, tenkan_p=9, kijun_p=26, senk
         sig = -1
     return sig
 
-# Fonction optimisée pour récupérer les données via Alpha Vantage
+# Fonction optimisée pour récupérer les données via Alpha Vantage avec gestion des limites
 @st.cache_data(ttl=3600)  # Cache les données pendant 1 heure
-def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full'):
+def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full', retries: int = 2):
     print(f"\n--- Début get_data_av: sym='{symbol}', interval='{interval}', outputsize='{outputsize}' ---")
-    try:
-        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={API_KEY}"
-        response = requests.get(url)
-        data = response.json()
-        
-        if "Error Message" in data:
-            st.warning(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
-            print(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
+    for attempt in range(retries + 1):
+        try:
+            url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={API_KEY}"
+            response = requests.get(url)
+            data = response.json()
+            
+            if "Error Message" in data:
+                st.warning(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
+                print(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
+                return None
+            if "Information" in data and "limit" in data["Information"].lower():
+                if attempt < retries:
+                    st.warning(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol}. Attente de 60 secondes avant nouvelle tentative ({attempt+1}/{retries+1})...")
+                    print(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol}. Attente avant nouvelle tentative.")
+                    time.sleep(60)  # Attendre 60 secondes pour réinitialiser la limite
+                    continue
+                else:
+                    st.error(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol} après {retries} tentatives. Vérifiez votre clé API ou attendez plus longtemps.")
+                    print(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol} après {retries} tentatives.")
+                    return None
+            if f"Time Series ({interval})" not in data:
+                st.warning(f"Alpha Vantage: Données non disponibles pour {symbol}.")
+                print(f"Alpha Vantage: Données non disponibles pour {symbol}.")
+                return None
+            
+            time_series = data[f"Time Series ({interval})"]
+            df = pd.DataFrame.from_dict(time_series, orient='index')
+            df = df.rename(columns={
+                '1. open': 'Open',
+                '2. high': 'High',
+                '3. low': 'Low',
+                '4. close': 'Close',
+                '5. volume': 'Volume'
+            })
+            df = df[['Open', 'High', 'Low', 'Close']].astype(float)
+            df.index = pd.to_datetime(df.index).tz_localize('UTC')
+            df = df.sort_index()
+            
+            if df.empty or len(df) < 100:
+                st.warning(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
+                print(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
+                return None
+            
+            print(f"Données pour {symbol} OK. Retour de {len(df.dropna())} lignes après dropna.\n--- Fin get_data_av {symbol} ---\n")
+            return df.dropna()
+        except Exception as e:
+            st.error(f"Erreur Alpha Vantage pour {symbol}: {type(e).__name__} - {e}")
+            print(f"ERREUR Alpha Vantage pour {symbol}:\n{traceback.format_exc()}")
             return None
-        if "Information" in data and "limit" in data["Information"].lower():
-            st.error(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol}. Attendez ou vérifiez votre clé API.")
-            print(f"Alpha Vantage: Limite de requêtes atteinte pour {symbol}.")
-            return None
-        if f"Time Series ({interval})" not in data:
-            st.warning(f"Alpha Vantage: Données non disponibles pour {symbol}.")
-            print(f"Alpha Vantage: Données non disponibles pour {symbol}.")
-            return None
-        
-        time_series = data[f"Time Series ({interval})"]
-        df = pd.DataFrame.from_dict(time_series, orient='index')
-        df = df.rename(columns={
-            '1. open': 'Open',
-            '2. high': 'High',
-            '3. low': 'Low',
-            '4. close': 'Close',
-            '5. volume': 'Volume'
-        })
-        df = df[['Open', 'High', 'Low', 'Close']].astype(float)
-        df.index = pd.to_datetime(df.index).tz_localize('UTC')
-        df = df.sort_index()
-        
-        if df.empty or len(df) < 100:
-            st.warning(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
-            print(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
-            return None
-        
-        print(f"Données pour {symbol} OK. Retour de {len(df.dropna())} lignes après dropna.\n--- Fin get_data_av {symbol} ---\n")
-        return df.dropna()
-    except Exception as e:
-        st.error(f"Erreur Alpha Vantage pour {symbol}: {type(e).__name__} - {e}")
-        print(f"ERREUR Alpha Vantage pour {symbol}:\n{traceback.format_exc()}")
-        return None
 
 # Fonction calculate_all_signals_pine (inchangée)
 def calculate_all_signals_pine(data):
@@ -381,7 +388,7 @@ with col2:
                     'Bear': 0,
                     'details': {'Info': 'Données Alpha Vantage non dispo/symb invalide (logs serveur)'}
                 })
-            time.sleep(10)  # Réduction à 10 secondes pour respecter la limite de 5 requêtes/minute
+            time.sleep(12)  # Pause augmentée à 12 secondes pour respecter strictement la limite
         pb.empty()
         stx.empty()
         if pr_res:
@@ -413,9 +420,3 @@ with col2:
 with st.expander("ℹ️ Comment ça marche (Logique Pine Script avec Données Alpha Vantage)"):
     st.markdown("""**6 Signaux Confluence:** HMA(20), RSI(10), ADX(14)>=20, HA(Simple), SHA(10,10), Ichi(9,26,52). **Comptage & Étoiles:** Pine. **Source:** API Alpha Vantage.""")
 st.caption("Les données sont mises en cache pendant 1 heure pour améliorer les performances. Relancez après ce délai pour des données actualisées.")
-
-# Fichier requirements.txt à inclure dans le dépôt GitHub
-# streamlit>=1.25.0
-# pandas>=2.0.0
-# numpy>=1.24.0
-# requests>=2.28.0
