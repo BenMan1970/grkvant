@@ -5,10 +5,14 @@ from datetime import datetime, timedelta, timezone
 import time
 import traceback
 import requests
+import os
 
 st.set_page_config(page_title="Scanner Confluence Forex (Alpha Vantage)", page_icon="⭐", layout="wide")
 st.title("🔍 Scanner Confluence Forex Premium (Données Alpha Vantage)")
 st.markdown("*Utilisation de l'API Alpha Vantage pour les données de marché H1*")
+
+# Clé API Alpha Vantage (via variable d'environnement pour sécurité)
+API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "votre_clé_api_alpha_vantage")  # Remplacez par votre clé ou configurez dans les secrets
 
 # Liste des paires forex (format Alpha Vantage)
 FOREX_PAIRS = [
@@ -16,9 +20,6 @@ FOREX_PAIRS = [
     'AUDUSD', 'USDCAD', 'NZDUSD', 'EURJPY',
     'GBPJPY', 'EURGBP'
 ]
-
-# Clé API Alpha Vantage (remplacez par votre clé)
-API_KEY = "votre_clé_api_alpha_vantage"
 
 # Fonctions de calcul des indicateurs (inchangées)
 def ema(s, p): return s.ewm(span=p, adjust=False).mean()
@@ -102,8 +103,8 @@ def ichimoku_pine_signal(df_high, df_low, df_close, tenkan_p=9, kijun_p=26, senk
         sig = -1
     return sig
 
-# Nouvelle fonction pour récupérer les données via Alpha Vantage
-@st.cache_data(ttl=300)
+# Fonction optimisée pour récupérer les données via Alpha Vantage
+@st.cache_data(ttl=3600)  # Cache les données pendant 1 heure
 def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full'):
     print(f"\n--- Début get_data_av: sym='{symbol}', interval='{interval}', outputsize='{outputsize}' ---")
     try:
@@ -111,7 +112,6 @@ def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full'):
         response = requests.get(url)
         data = response.json()
         
-        # Vérifier si la réponse contient des erreurs
         if "Error Message" in data:
             st.warning(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
             print(f"Alpha Vantage: Erreur pour {symbol}: {data['Error Message']}")
@@ -125,7 +125,6 @@ def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full'):
             print(f"Alpha Vantage: Données non disponibles pour {symbol}.")
             return None
         
-        # Convertir les données en DataFrame
         time_series = data[f"Time Series ({interval})"]
         df = pd.DataFrame.from_dict(time_series, orient='index')
         df = df.rename(columns={
@@ -137,9 +136,8 @@ def get_data_av(symbol: str, interval: str = '60min', outputsize: str = 'full'):
         })
         df = df[['Open', 'High', 'Low', 'Close']].astype(float)
         df.index = pd.to_datetime(df.index).tz_localize('UTC')
-        df = df.sort_index()  # Trier par date croissante
+        df = df.sort_index()
         
-        # Vérifier si assez de données
         if df.empty or len(df) < 100:
             st.warning(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
             print(f"Alpha Vantage: Données insuffisantes pour {symbol} ({len(df)} barres).")
@@ -383,7 +381,7 @@ with col2:
                     'Bear': 0,
                     'details': {'Info': 'Données Alpha Vantage non dispo/symb invalide (logs serveur)'}
                 })
-            time.sleep(12)  # Pause de 12 secondes pour respecter la limite de 5 requêtes/minute
+            time.sleep(10)  # Réduction à 10 secondes pour respecter la limite de 5 requêtes/minute
         pb.empty()
         stx.empty()
         if pr_res:
@@ -414,4 +412,10 @@ with col2:
             st.error("❌ Aucune paire traitée (Alpha Vantage). Vérifiez logs serveur.")
 with st.expander("ℹ️ Comment ça marche (Logique Pine Script avec Données Alpha Vantage)"):
     st.markdown("""**6 Signaux Confluence:** HMA(20), RSI(10), ADX(14)>=20, HA(Simple), SHA(10,10), Ichi(9,26,52). **Comptage & Étoiles:** Pine. **Source:** API Alpha Vantage.""")
-st.caption("Scanner H1 (Alpha Vantage). Multi-TF non actif.")
+st.caption("Les données sont mises en cache pendant 1 heure pour améliorer les performances. Relancez après ce délai pour des données actualisées.")
+
+# Fichier requirements.txt à inclure dans le dépôt GitHub
+# streamlit>=1.25.0
+# pandas>=2.0.0
+# numpy>=1.24.0
+# requests>=2.28.0
